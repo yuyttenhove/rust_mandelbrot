@@ -3,6 +3,7 @@ use image::{RgbImage, Rgb, imageops};
 use std::time::{Instant};
 use num::Integer;
 use rayon::prelude::*;
+use ndarray::prelude::*;
 
 fn escape_time(c: Complex<f64>, max_iter: u32) -> u32 {
     let mut p = Complex::new(0.0, 0.0);
@@ -25,6 +26,18 @@ fn escape_time_region(corner: Complex<f64>, npix_x: u32, npix_y: u32, scale: f64
         *pixel = Rgb([escape_time, escape_time, escape_time]);
     }
     return im;
+}
+
+fn x_coord(ix: (usize, usize)) -> u32{
+    return ix.0 as u32;
+}
+
+fn escape_time_region_arrays(corner: Complex<f64>, npix_x: u32, npix_y: u32, scale: f64) -> Array2<u32>{
+    //let mut escape_times = Array2::<u32>::zeros((npix_x, npix_y));
+    let xcoords: Array2::<u32> = Array::from_shape_fn((npix_x as usize, npix_y as usize), |(i, j)|{return j as u32;});
+    println!("{:?}", &xcoords);
+    let ycoords = xcoords.reversed_axes();
+    return ycoords;
 }
 
 fn get_chunk_corners(npix_x: u32, npix_y: u32, chunk_w: u32, chunk_h: u32) -> Vec<Complex<f64>>{
@@ -58,6 +71,7 @@ fn escape_time_image(center: Complex<f64>, npix_x: u32, npix_y: u32, width_x: f6
 
     chunk_corners.par_iter().zip(chunk_imgs.par_iter_mut()).for_each(|(chunk_corner, chunk_img)|{
         *chunk_img = escape_time_region(img_corner + *chunk_corner*scale, chunk_w, chunk_h, scale);
+        escape_time_region_arrays(img_corner + *chunk_corner*scale, chunk_w, chunk_h, scale);
     });
 
     let mut canvas: RgbImage = RgbImage::new(npix_x, npix_y);
