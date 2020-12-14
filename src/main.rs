@@ -6,34 +6,58 @@ use rayon::prelude::*;
 use ndarray::prelude::*;
 use std::cmp;
 
-fn escape_time(c: Complex<f64>, max_iter: u16) -> u16 {
-    let mut p = Complex::new(0.0, 0.0);
-    let mut norm_sqr = p.norm_sqr();
+fn escape_time_optimized(c: Complex<f64>, max_iter: u16) -> u16 {
+    let x0 = c.re;
+    let y0 = c.im;
+
+    // Test whether c lies in cardoid:
+    let mut x_prime = x0 - 0.25;
+    let y_prime = y0 * y0;
+    let q = x_prime * x_prime +y_prime;
+    if q * (q + x_prime) <= 0.25 * y_prime { return max_iter; }
+
+    // Test whether c lies in period-2 bulb
+    x_prime = x0 + 1.;
+    if x_prime * x_prime + y_prime <= 0.0625 { return max_iter; }
+
+    let mut x = 0.;
+    let mut y = 0.;
+    let mut x2 = 0.;
+    let mut y2 = 0.;
     let mut ctr = 0 as u16;
 
-    while ctr < max_iter && norm_sqr < 4. {
+    while ctr < max_iter && x2 + y2 < 4. {
         ctr += 1;
-        p = p * p + c;
-        norm_sqr = p.norm_sqr();
+        y = (x + x) * y + y0;
+        x = x2 - y2 + x0;
+        x2 = x * x;
+        y2 = y * y
     }
-    return ctr;
+    ctr
 }
 
-fn escape_time_chunk(corner: Complex<f64>, npix_x: u32, npix_y: u32, scale: f64, max_iter: u16) -> Array2<u16>{
+fn escape_time_chunk(corner: Complex<f64>, npix_x: usize, npix_y: usize, scale: f64, max_iter: u16) -> Array2<u16>{
     let escape_times: Array2::<u16> = Array::from_shape_fn(
-        (npix_y as usize, npix_x as usize),
+        (npix_y, npix_x),
         |(i, j)| {
-            return escape_time(corner + Complex::new(j as f64, i as f64) * scale, max_iter);
+            escape_time_optimized(corner + Complex::new(j as f64, i as f64) * scale, max_iter)
         });
-    return escape_times;
+    escape_times
 }
 
-fn get_chunk_corners(npix_x: u32, npix_y: u32, chunk_w: u32, chunk_h: u32) -> Vec<Complex<f64>>{
-    let n_chunks = ((npix_x.div_ceil(&chunk_w)) * (npix_y.div_ceil(&chunk_h))) as usize;
+fn color_escape_time_array(arr: Array2<u16>, max_iter: u16) -> Array3<u8>{
+    let (h, w) = arr.dim();
+    Array3::<u8>::from_shape_fn((h, w, 3), |(i, j, k)| {
+       palette(arr[[i, j]], k, max_iter)
+    })
+}
+
+fn get_chunk_corners(npix_x: usize, npix_y: usize, chunk_w: usize, chunk_h: usize) -> Vec<Complex<f64>>{
+    let n_chunks = (npix_x.div_ceil(&chunk_w)) * (npix_y.div_ceil(&chunk_h));
     let mut chunk_corners = vec![Complex::new(0., 0.); n_chunks];
 
-    let mut cx = 0 as u32;
-    let mut cy = 0 as u32;
+    let mut cx = 0 as usize;
+    let mut cy = 0 as usize;
     let mut i = 0;
     while cx < npix_x {
         while cy < npix_y {
@@ -44,42 +68,48 @@ fn get_chunk_corners(npix_x: u32, npix_y: u32, chunk_w: u32, chunk_h: u32) -> Ve
         cx += chunk_w;
         cy = 0;
     }
-    return chunk_corners
+    chunk_corners
 }
 
-fn escape_time_array(center: Complex<f64>, npix_x: u32, npix_y: u32, width_x: f64,
-                     chunk_w: u32, chunk_h: u32, max_iter: u16) -> Array2<u16>{
+fn construct_mandelbrot_array(center: Complex<f64>, npix_x: usize, npix_y: usize, width_x: f64,
+                              chunk_w: usize, chunk_h: usize, max_iter: u16) -> Array3<u8> {
     let scale = width_x / (npix_x as f64);
     let center_pix_x = npix_x as f64 / 2.;
     let center_pix_y = npix_y as f64 / 2.;
     let img_corner = center - Complex::new(center_pix_x * scale, center_pix_y * scale);
 
     let chunk_corners = get_chunk_corners(npix_x, npix_y, chunk_w, chunk_h);
-    let chunk_escape_times: Vec<Array2<u16>> = chunk_corners.par_iter()
+    let chunk_escape_times: Vec<Array3<u8>> = chunk_corners.par_iter()
         .map(|chunk_corner|{
-            return escape_time_chunk(img_corner + *chunk_corner * scale, chunk_w, chunk_h, scale, max_iter)
+            let escape_time_chunk = escape_time_chunk(img_corner + *chunk_corner * scale, chunk_w, chunk_h, scale, max_iter);
+            color_escape_time_array(escape_time_chunk, max_iter)
         }).collect();
 
-    let mut escape_times = Array2::<u16>::zeros((npix_y as usize, npix_x as usize));
+    let mut pixels = Array3::<u8>::zeros((npix_y, npix_x, 3));
 
     for (chunk_corner, chunk_escape_times) in chunk_corners.iter().zip(chunk_escape_times.iter()){
         let x = chunk_corner.re as usize;
-        let x_end = cmp::min(npix_x as usize, x + chunk_w as usize);
+        let x_end = cmp::min(npix_x, x + chunk_w);
         let y = chunk_corner.im as usize;
-        let y_end = cmp::min(npix_y as usize, y + chunk_h as usize);
-        escape_times.slice_mut(s![y..y_end, x..x_end])
-            .assign(&chunk_escape_times.slice(s![..y_end - y, ..x_end - x]));
+        let y_end = cmp::min(npix_y, y + chunk_h);
+        pixels.slice_mut(s![y..y_end, x..x_end, ..])
+            .assign(&chunk_escape_times.slice(s![..y_end - y, ..x_end - x, ..]));
     }
-    //return escape_times.mapv(|v| v as u32);
-    return escape_times;
+    pixels
 }
 
-fn palette(hue: f64, channel: usize) -> u8 {
-    if hue == 0. {
+fn construct_mandelbrot_image(center: Complex<f64>, npix_x: usize, npix_y: usize, width_x: f64,
+                              chunk_w: usize, chunk_h: usize, max_iter: u16) -> RgbImage{
+    let pixels = construct_mandelbrot_array(center, npix_x, npix_y, width_x, chunk_w, chunk_h, max_iter);
+    arr_to_image(pixels)
+}
+
+fn palette(iteration: u16, channel: usize, max_iter: u16) -> u8 {
+    if iteration == 0 || iteration == max_iter {
         return 0;
     }
-    let n_colors = 16.;
-    let color_map: Array2<u8> = arr2(&[
+    let n_colors = 16;
+    let color_map: [[u8; 3]; 16] = [
         [66, 30, 15],
         [25, 7, 26],
         [9, 1, 47],
@@ -96,8 +126,8 @@ fn palette(hue: f64, channel: usize) -> u8 {
         [204, 128, 0],
         [153, 87, 0],
         [106, 52, 3],
-    ]);
-    return color_map[[(hue % (n_colors - 1.)) as usize, channel]];
+    ];
+    return color_map[(iteration % n_colors) as usize][channel];
 }
 
 fn arr_to_image(arr: Array3<u8>) -> RgbImage {
@@ -110,46 +140,10 @@ fn arr_to_image(arr: Array3<u8>) -> RgbImage {
         .expect("container should have the right size for the image dimensions")
 }
 
-fn escape_time_to_image(escape_times: Array2<u16>, max_iter: u16) -> RgbImage {
-    let (n_rows, n_cols) = escape_times.dim();
-    let mut n_pixels_per_n_iterations = Array1::<u32>::zeros((max_iter) as usize);
-    escape_times.iter().for_each(|v| {
-        if *v < max_iter {
-            n_pixels_per_n_iterations[*v as usize] += 1;
-        }
-    });
-    let total = n_pixels_per_n_iterations.sum() as f64;
-    n_pixels_per_n_iterations.accumulate_axis_inplace(Axis(0), |&prev, curr| *curr += prev);
-    let hue_array = Array2::<f64>::from_shape_fn(
-        escape_times.dim(),
-        |(i, j)| {
-            let v = escape_times[[i, j]];
-            let hue;
-            if v == max_iter {
-                hue = 0.;
-            } else {
-                let helper = n_pixels_per_n_iterations[v as usize];
-                hue = v as f64;
-            }
-            return hue;
-        }
-    );
-
-    let arr = Array3::<u8>::from_shape_fn(
-        (n_rows, n_cols, 3),
-        |(i, j, k)| { return palette(hue_array[[i, j]], k); }
-    );
-    return arr_to_image(arr);
-}
-
 fn main() {
-    let mut start = Instant::now();
+    let start = Instant::now();
     let max_iter = 1024 as u16;
-    let arr = escape_time_array(Complex::new(-0.75, 0.05), 1000, 1000, 3., 32, 32, max_iter);
-    let duration = start.elapsed();
-    println!("Array construction took: {:?}", duration);
-    start = Instant::now();
-    let im = escape_time_to_image(arr, max_iter);
+    let im = construct_mandelbrot_image(Complex::new(-0.75, 0.), 1000, 1000, 5., 32, 32, max_iter);
     let duration = start.elapsed();
     println!("Image construction took: {:?}", duration);
     im.save("test.png").unwrap();
