@@ -1,10 +1,8 @@
 mod mandelbrot;
 
-use sdl2::pixels::Color;
-use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use num::complex::Complex;
-use std::time::{Instant, Duration};
+use std::time::{Instant};
+use glium::Surface;
 
 
 fn main() {
@@ -15,37 +13,36 @@ fn main() {
     println!("Image construction took: {:?}", duration);
     im.save("test.png").unwrap();
 
-    let sdl_context = sdl2::init().unwrap();
-    let video_subsystem = sdl_context.video().unwrap();
+    // 1. The **winit::EventsLoop** for handling events.
+    let event_loop = glium::glutin::event_loop::EventLoop::new();
+    // 2. Parameters for building the Window.
+    let wb = glium::glutin::window::WindowBuilder::new()
+        .with_inner_size(glium::glutin::dpi::LogicalSize::new(1024.0, 768.0))
+        .with_title("Hello world");
+    // 3. Parameters for building the OpenGL context.
+    let cb = glium::glutin::ContextBuilder::new();
+    // 4. Build the Display with the given window and OpenGL context parameters and register the
+    //    window with the events_loop.
+    let display = glium::Display::new(wb, cb, &event_loop).unwrap();
 
-    let window = video_subsystem.window("rust-sdl2 demo", 800, 600)
-        .position_centered()
-        .build()
-        .unwrap();
+    event_loop.run(move |ev, _, control_flow| {
 
-    let mut canvas = window.into_canvas().build().unwrap();
-
-    canvas.set_draw_color(Color::RGB(0, 255, 255));
-    canvas.clear();
-    canvas.present();
-    let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut i = 0;
-    'running: loop {
-        i = (i + 1) % 255;
-        canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-        canvas.clear();
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit {..} |
-                Event::KeyDown { keycode: Some(Keycode::Escape), .. } => {
-                    break 'running
+        let mut target = display.draw();
+        target.clear_color(0.0, 0.0, 1.0, 1.0);
+        target.finish().unwrap();
+        
+        let next_frame_time = std::time::Instant::now() +
+            std::time::Duration::from_nanos(16_666_667);
+        *control_flow = glium::glutin::event_loop::ControlFlow::WaitUntil(next_frame_time);
+        match ev {
+            glium::glutin::event::Event::WindowEvent { event, .. } => match event {
+                glium::glutin::event::WindowEvent::CloseRequested => {
+                    *control_flow = glium::glutin::event_loop::ControlFlow::Exit;
+                    return;
                 },
-                _ => {}
-            }
+                _ => return,
+            },
+            _ => (),
         }
-        // The rest of the game loop goes here...
-
-        canvas.present();
-        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60));
-    }
+    });
 }
