@@ -14,7 +14,7 @@ fn main() {
     let max_iter = 1024 as u16;
     let mut width_x = 5.;
     let mut center = Complex::new(-0.75, 0.);
-    let mut im = mandelbrot::construct_mandelbrot_image(center, 1000, 1000, width_x, 32, 32, max_iter);
+    let mut im = mandelbrot::construct_mandelbrot_image(center, 1600, 1000, width_x, 32, 32, max_iter);
     let duration = start.elapsed();
     println!("Image construction took: {:?}", duration);
     im.save("test.png").unwrap();
